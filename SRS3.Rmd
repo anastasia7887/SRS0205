@@ -1,0 +1,518 @@
+---
+title: "Kononova"
+output:
+
+  html_document:
+
+    df_print: paged
+
+  html_notebook: default
+
+  pdf_document: default
+
+  word_document: default
+---
+
+Имеются данные:
+Набор данных `Bank` содержит сведения о результатах прямых маркетинговых кампаний (прямые обзвоны), проводимых португальскими банками в 2008 -- 2010 гг. Цель -- предсказать, сделает ли клиент срочный вклад (переменная `y`). Список столбцов (данные о потенциальных клиентах, которым звонили):   
+
+*Данные банковского досье*   
+
+1. **`age`** -- возраст в годах.   
+
+1. **`job`** -- тип работы.   
+
+1. **`marital `** -- семейное положение.   
+
+1. **`education `** -- уровень образования: `basic.4y` -- школа, 4 года; `basic.6y` -- школа, 6 лет; `basic.9y` -- школа, 9 лет; `high.school` -- оконченное школьное, `illiterate` -- неграмотный, `professional.course` -- профессиональное, `university.degree` -- диплом университета, `unknown` -- неизвестно.   
+
+1. **`default`** -- был ли дефолт по кредиту ранее.   
+
+1. **`housing`** -- есть ли ипотека.   
+
+1. **`loan`** -- есть ли личный кредит.   
+
+*Данные банковского обзвона*   
+
+1. **`contact`** -- тип обзвона: `telephone` -- по стационарному телефону, `cellular` -- по сотовому.   
+
+1. **`month`** -- месяц последнего звонка.   
+
+1. **`day_of_week`** -- день недели последнего звонка.   
+
+1. **`duration`** -- длительность посленднего звонка. Внимание: до начала разговора значение неизвестно, а после окончания разговора ещё не известен результат (купит ли продукт банка).   
+
+1. **`campaign`** -- количество контактов с этим клиентом за посленднюю компанию, включая последний звонок.   
+
+1. **`pdays`** -- сколько прошло дней с последнего звонка клиенту в предыдущую маркетинговую кампанию (значение 999 означает, что звоним впервые).   
+
+1. **`previous`** -- сколько раз звонили клиенту в последнюю маркетинговую кампанию.   
+
+1. **`poutcome`** -- чем кончился контакт с клиентом в предыдущую кампанию: `failure` -- неудача, `nonexistent` -- контакта не было, `success` -- успех.   
+
+*Целевая переменная*   
+
+1. **`y`** -- открыл ли клиент срочный вклад: `yes` -- да, `no` -- нет.    
+
+Нужно узнать зависит ли открытие клиентом срочного вкалада от возраста, места работы, семейного положения, образования клиента, наличия у него кредита и дефолта по нему, ипотеки; и зависит ли открытие вклада от данных банковского обзвона, таких как дата обзвона, количество контактов, тип обзвона, количество звонков, успешное окончание контакта.
+
+
+
+```{r Данные и пакеты, warning = F, message = F}
+library('ISLR')
+library('MASS')
+library('boot')
+library('e1071')     # SVM
+library('tree')  
+library('randomForest')      # случайный лес randomForest()
+library('gbm')               # бустинг gbm()
+
+#Загружаем данные
+data <- read.csv("Bank_for_models.csv", header = TRUE, dec = ",", sep = ";")
+head(data)
+df.train <- data
+my.seed <- 11
+
+#Представляем переменные как факторы
+df.train$job <- as.factor(df.train$job)
+df.train$marital <- as.factor(df.train$marital)
+df.train$education <- as.factor(df.train$education)
+df.train$default <- as.factor(df.train$default)
+df.train$housing <- as.factor(df.train$housing)
+df.train$loan <- as.factor(df.train$loan)
+df.train$contact <- as.factor(df.train$contact)
+df.train$month <- as.factor(df.train$month)
+df.train$poutcome <- as.factor(df.train$poutcome)
+df.train$y <- as.factor(df.train$y)
+```
+
+*Построим модель с помощью деревьев классификации*
+
+```{r Деревья, warning = F, message = F}
+tree.y <- tree(y ~ ., df.train)
+
+summary(tree.y)
+
+
+
+# график результата
+
+plot(tree.y)              # ветви
+
+text(tree.y, pretty = 0)  # подписи
+
+tree.y                    # посмотреть всё дерево в консоли
+
+# Оцениваем точность ===========================================================
+
+
+# ядро генератора случайных чисел
+
+set.seed(my.seed)
+
+
+# обучающая выборка
+
+train <- sample(1:nrow(df.train), 200)
+
+
+# тестовая выборка
+
+Y.test <- df.train[-train,]
+test.tree.y <- df.train$y[-train]
+
+
+# строим дерево на обучающей выборке
+
+tree.y <- tree(y ~ . , df.train, subset = train)
+
+
+# Оцениваем точность ###########################################################
+
+
+
+# делаем прогноз
+
+tree.pred <- predict(tree.y, Y.test, type = "class")
+
+
+# матрица неточностей
+
+tbl <- table(tree.pred, test.tree.y)
+
+
+# ACC на тестовой
+
+acc.test <- sum(diag(tbl))/sum(tbl)
+
+names(acc.test)[length(acc.test)] <- 'Bank.class.tree.all'
+
+acc.test
+```
+
+Попробуем обрезать дерево для улучшения результатов
+
+```{r, warning = F, message = F}
+# Готовимся к обрезке дерева ===================================================
+
+set.seed(my.seed)
+
+cv.y <- cv.tree(tree.y, FUN = prune.misclass)
+
+# имена элементов полученного объекта
+
+names(cv.y)
+
+# сам объект
+
+cv.y
+
+
+# графики изменения параметров метода по ходу обрезки дерева ###################
+
+
+# 1. ошибка с кросс-валидацией в зависимости от числа узлов
+
+par(mfrow = c(1, 2))
+
+plot(cv.y$size, cv.y$dev, type = "b",
+     
+     ylab = 'Частота ошибок с кросс-вал. (dev)',
+     
+     xlab = 'Число узлов (size)')
+
+# размер дерева с минимальной ошибкой
+
+opt.size <- cv.y$size[cv.y$dev == min(cv.y$dev)]
+
+abline(v = opt.size, col = 'red', 'lwd' = 2)     # соотв. вертикальная прямая
+
+mtext(opt.size, at = opt.size, side = 1, col = 'red', line = 1)
+
+
+# 2. ошибка с кросс-валидацией в зависимости от штрафа на сложность
+
+plot(cv.y$k, cv.y$dev, type = "b",
+     
+     ylab = 'Частота ошибок с кросс-вал. (dev)',
+     
+     xlab = 'Штраф за сложность (k)')
+
+
+
+# Обрезаем: дерево с 4 узлами ##################################################
+
+prune.y <- prune.misclass(tree.y, best = 4)
+
+# визуализация
+
+plot(prune.y)
+
+text(prune.y, pretty = 0)
+
+# Оцениваем точность ###########################################################
+
+
+# прогноз на тестовую выборку
+
+tree.pred <- predict(prune.y, Y.test, type = "class")
+
+
+# матрица неточностей
+
+tbl <- table(tree.pred, test.tree.y)
+
+
+# ACC на тестовой
+
+acc.test <- c(acc.test, sum(diag(tbl))/sum(tbl))
+
+names(acc.test)[length(acc.test)] <- 'Bank.class.tree.4'
+
+acc.test
+# сбрасываем графические параметры
+
+par(mfrow = c(1, 1))
+
+```
+Обратимся к другим методам.
+
+*Бэггинг*
+
+```{r, warning = F, message = F}
+# Бэггинг ----------------------------------------------------------------------
+
+
+# Обучаем модель ###############################################################
+
+# бэггинг с 16 предикторами
+
+set.seed(my.seed)
+
+bag.bank <- randomForest(y ~ ., data = df.train, subset = train, 
+                           
+                           mtry = 16, importance = TRUE)
+
+bag.bank
+
+
+# Оцениваем точность ###########################################################
+
+
+# прогноз
+
+yhat.bag <- predict(bag.bank, newdata = df.train[-train, ])
+
+
+# график "прогноз -- реализация"
+
+plot(yhat.bag, test.tree.y)
+
+# линия идеального прогноза
+
+abline(0, 1)
+
+# матрица неточностей
+
+tbl <- table(yhat.bag, test.tree.y)
+
+
+
+# ACC на тестовой
+
+acc.test <- c(acc.test, sum(diag(tbl))/sum(tbl))
+
+names(acc.test)[length(acc.test)] <- 'Bank.bag.16'
+
+acc.test
+
+```
+Попробуем бэггинг с 25 деревьями
+
+```{r Бэггинг, warning = F, message = F}
+
+# Обучаем модель ###############################################################
+
+
+# бэггинг с 16 предикторами и 25 деревьями
+
+bag.bank <- randomForest(y ~ ., data = df.train, subset = train,
+                           
+                           mtry = 16, ntree = 25)
+
+
+
+# прогноз
+
+yhat.bag <- predict(bag.bank, newdata = df.train[-train, ])
+
+# Оцениваем точность ###########################################################
+# матрица неточностей
+
+tbl <- table(yhat.bag, test.tree.y)
+
+
+
+# ACC на тестовой
+
+acc.test <- c(acc.test, sum(diag(tbl))/sum(tbl))
+
+names(acc.test)[length(acc.test)] <- 'Bank.bag.16.25'
+
+acc.test
+```
+Теперь обратимся к методу случайного леса
+
+```{r Случайный лес, warning = F, message = F}
+# Случайный лес ----------------------------------------------------------------
+
+
+
+# Обучаем модель ###############################################################
+
+set.seed(my.seed)
+
+rf.bank <- randomForest(y ~ ., data = df.train, subset = train,
+                          
+                          mtry = 6, importance = TRUE)
+
+
+# Оцениваем точность ###########################################################
+
+# прогноз
+
+yhat.rf <- predict(rf.bank, newdata = df.train[-train, ])
+
+
+
+# Оцениваем точность ###########################################################
+# матрица неточностей
+
+tbl <- table(yhat.rf, test.tree.y)
+
+
+
+# ACC на тестовой
+
+acc.test <- c(acc.test, sum(diag(tbl))/sum(tbl))
+
+names(acc.test)[length(acc.test)] <- 'Bank.rf.6'
+
+acc.test
+
+
+
+
+# важность предикторов
+
+importance(rf.bank)  # оценки 
+
+varImpPlot(rf.bank)  # графики
+
+```
+ Так же попробуем построить модель с помощью бустинга
+ 
+```{r, warning = F, message = F}
+# Бустинг ----------------------------------------------------------------------
+
+
+# Обучаем модель ###############################################################
+
+
+set.seed(my.seed)
+
+boost.bank <- gbm(y ~ ., data = df.train[train, ], distribution = "gaussian",
+                    
+                    n.trees = 5000, interaction.depth = 4)
+
+# график и таблица относительной важности переменных
+
+summary(boost.bank)
+
+
+# графики частной зависимости для двух наиболее важных предикторов
+
+par(mfrow = c(1, 2))
+
+plot(boost.bank, i = "poutcome")
+
+plot(boost.bank, i = "campaign")
+
+
+# Оцениваем точность ###########################################################
+
+
+# прогноз
+
+yhat.boost <- predict(boost.bank, newdata = df.train[-train, ], n.trees = 5000)
+
+# матрица неточностей
+
+tbl <- table(yhat.boost, test.tree.y)
+
+
+
+# ACC на тестовой
+
+acc.test <- c(acc.test, sum(diag(tbl))/sum(tbl))
+
+names(acc.test)[length(acc.test)] <- 'Bank.boost'
+
+acc.test
+```
+И посмотрим как поменяются результаты при значении гиперпараметра (lambda) 0.2
+
+```{r, warning = F, message = F}
+
+# меняем значение гиперпараметра (lambda) на 0.2 -- аргумент shrinkage
+
+boost.boston <- gbm(y ~ ., data = df.train[train, ], distribution = "gaussian",
+                    
+                    n.trees = 5000, interaction.depth = 4, 
+                    
+                    shrinkage = 0.2, verbose = F)
+
+
+# Оцениваем точность ###########################################################
+
+
+
+# прогноз
+
+yhat.boost <- predict(boost.bank, newdata = df.train[-train, ], n.trees = 5000)
+
+# матрица неточностей
+
+tbl <- table(yhat.boost, test.tree.y)
+
+
+
+# ACC на тестовой
+
+acc.test <- c(acc.test, sum(diag(tbl))/sum(tbl))
+
+names(acc.test)[length(acc.test)] <- 'Bank.boost.0.2'
+
+acc.test
+```
+Теперь попробуем использовать машины опорныз векторов
+
+```{r, warning = F, message = F}
+###### Машины опорных векторов
+
+# SVM с радиальным ядром и маленьким cost
+
+svmfit <- svm(y ~ ., data = df.train[train, ], kernel = "radial", 
+              
+              gamma = 1, cost = 1)
+
+
+summary(svmfit)
+
+
+
+# SVM с радиальным ядром и большим cost
+
+svmfit <- svm(y ~ ., data = df.train[train, ], kernel = "radial", 
+              
+              gamma = 1, cost = 1e5)
+
+summary(svmfit)
+
+
+# перекрёстная проверка
+
+set.seed(my.seed)
+
+tune.out <- tune(svm, y ~ ., data = df.train[train, ], kernel = "radial", 
+                 
+                 ranges = list(cost = c(0.1, 1, 10, 100, 1000),
+                               
+                               gamma = c(0.5, 1, 2, 3, 4)))
+
+summary(tune.out)
+
+# матрица неточностей для прогноза по лучшей модели
+
+tbl <- table(true = df.train[-train, "y"], 
+      
+      pred = predict(tune.out$best.model, newdata = df.train[-train, ]))
+
+
+
+# ACC на тестовой
+
+acc.test <- c(acc.test, sum(diag(tbl))/sum(tbl))
+
+names(acc.test)[length(acc.test)] <- 'Bank.m'
+
+acc.test
+```
+Как видно из вектора acc.test лучшая точность у дерева с четырьмя узлами на основании этой модели и будем строить прогноз
+```{r, warning = F, message = F}
+##Прогноз
+data1 <- read.csv("Bank_for_forecast.csv", header = TRUE, dec = ",", sep = ";")
+df.test <- data1
+prognoz <- predict(prune.y, df.test, type = "class")
+head(prognoz)
+```
